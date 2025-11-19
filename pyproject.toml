@@ -10,6 +10,7 @@ dependencies = [
     "google-cloud-bigquery>=3.38.0",
     "google-cloud-bigquery-storage>=2.34.0",
     "httpx>=0.28.1",
+    "motor>=3.7.1",
     "pandas>=2.3.3",
     "pydantic>=2.12.4",
     "pydantic-settings>=2.12.0",

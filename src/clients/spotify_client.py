@@ -1,22 +1,13 @@
-import asyncio
+from __future__ import annotations
+
 from typing import AsyncIterator, Dict, Any, List
 
 import httpx
-from .settings import get_settings
+
+from src.config.settings import get_settings
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_BASE = "https://api.spotify.com/v1"
-
-
-def normalize_album_id(raw: str) -> str:
-    """
-    Acepta tanto un ID '4aawyAB9vmqN3uQ7FjRGTy' como una URL
-    'https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy?si=...'
-    y devuelve solo el ID.
-    """
-    if "open.spotify.com/album/" in raw:
-        return raw.split("album/")[1].split("?")[0]
-    return raw
 
 
 class SpotifyClient:
@@ -25,6 +16,23 @@ class SpotifyClient:
         self.client_id = settings.spotify_client_id
         self.client_secret = settings.spotify_client_secret
         self._token: str | None = None
+
+    # ----------------- helpers internos -----------------
+
+    @staticmethod
+    def normalize_album_id(raw: str) -> str:
+        """
+        Acepta tanto un ID '4aawyAB9vmqN3uQ7FjRGTy' como una URL
+        'https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy?si=...'
+        y devuelve solo el ID.
+        """
+        if "open.spotify.com/album/" in raw:
+            return raw.split("album/")[1].split("?")[0]
+        return raw
+
+    @staticmethod
+    def _chunked(items: List[str], n: int) -> List[List[str]]:
+        return [items[i : i + n] for i in range(0, len(items), n)]
 
     async def _get_token(self) -> str:
         if self._token is not None:
@@ -42,7 +50,11 @@ class SpotifyClient:
             self._token = data["access_token"]
             return self._token
 
-    async def _get(self, path: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    async def _get(
+        self,
+        path: str,
+        params: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient() as client:
@@ -55,45 +67,25 @@ class SpotifyClient:
             resp.raise_for_status()
             return resp.json()
 
-    async def iter_playlist_tracks(
-        self,
-        playlist_id: str,
-        limit: int = 100,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    # ----------------- API pública (solo álbum / tracks) -----------------
+
+    async def get_album(self, album_ref: str) -> Dict[str, Any]:
         """
-        Itera sobre todos los tracks de una playlist.
-        Devuelve cada track como dict (el objeto 'track' de Spotify).
+        Devuelve el JSON completo del álbum a partir de un ID o URL.
         """
-        offset = 0
-        while True:
-            data = await self._get(
-                f"/playlists/{playlist_id}/tracks",
-                params={"limit": limit, "offset": offset},
-            )
-            items: List[Dict[str, Any]] = data.get("items", [])
-            if not items:
-                break
-
-            for item in items:
-                track = item.get("track")
-                if track:
-                    yield track
-
-            if data.get("next") is None:
-                break
-
-            offset += limit
+        album_id = self.normalize_album_id(album_ref)
+        return await self._get(f"/albums/{album_id}")
 
     async def iter_album_tracks(
-            self,
-            album_id: str,
-            limit: int = 50,
-    ):
+        self,
+        album_ref: str,
+        limit: int = 50,
+    ) -> AsyncIterator[Dict[str, Any]]:
         """
         Itera sobre los tracks de un álbum.
-        Devuelve cada track como dict (objeto 'track' de Spotify).
+        Devuelve cada track como dict (objeto 'track' parcial de Spotify).
         """
-        album_id = normalize_album_id(album_id)
+        album_id = self.normalize_album_id(album_ref)
 
         offset = 0
         while True:
@@ -113,17 +105,17 @@ class SpotifyClient:
 
             offset += limit
 
+    async def get_tracks_by_ids(self, track_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Dado un listado de track_ids, devuelve la lista de objetos track
+        completos (vía /tracks), manejando el chunking (50 por request).
+        """
+        all_tracks: List[Dict[str, Any]] = []
 
-# Pequeño test manual
-async def _demo():
-    client = SpotifyClient()
-    playlist_id = "37i9dQZF1DXcBWIGoYBM5M"  # Today's Top Hits
-    count = 0
-    async for track in client.iter_playlist_tracks(playlist_id):
-        print(track["name"], " - ", ", ".join(a["name"] for a in track["artists"]))
-        count += 1
-        if count >= 5:
-            break
+        for batch in self._chunked(track_ids, 50):
+            ids_param = ",".join(batch)
+            data = await self._get("/tracks", params={"ids": ids_param})
+            tracks = data.get("tracks") or []
+            all_tracks.extend(tracks)
 
-if __name__ == "__main__":
-    asyncio.run(_demo())
+        return all_tracks

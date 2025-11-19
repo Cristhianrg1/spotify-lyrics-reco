@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     gcp_project_id: str | None = Field(default=None, env="GCP_PROJECT_ID")
     bigquery_dataset: str | None = Field(default=None, env="BIGQUERY_DATASET")
 
+    mongo_uri: str | None = Field(default=None, env="MONGO_URI")
+    mongo_db_name: str | None = Field(default=None, env="MONGO_DB_NAME")
+
     # ruta al JSON de la SA
     google_application_credentials: str | None = Field(
         default=None,

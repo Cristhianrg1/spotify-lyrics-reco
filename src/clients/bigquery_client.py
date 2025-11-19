@@ -7,7 +7,7 @@ from google.cloud import bigquery
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter, LoadJobConfig
 from google.oauth2 import service_account
 
-from .settings import get_settings
+from src.config.settings import get_settings
 
 
 class BigQueryClient:
