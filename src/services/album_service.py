@@ -60,7 +60,7 @@ class AlbumService:
     async def ingest_album(
         self,
         album_ref: str,
-    ) -> None:
+    ) -> Dict[str, Any]:
         """
         Inserta o actualiza el álbum usando MERGE por album_id.
         """
@@ -128,3 +128,4 @@ class AlbumService:
 
         self.bq.execute(sql, params=row)
         print(f"[albums] MERGE OK para álbum {row['album_id']} ({row['album_name']})")
+        return row

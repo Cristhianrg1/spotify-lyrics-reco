@@ -22,6 +22,27 @@ class Settings(BaseSettings):
         env="GOOGLE_APPLICATION_CREDENTIALS",
     )
 
+    # Embeddings
+    # "openai" o "huggingface_api"
+    embedding_provider: str = Field(
+        "openai",
+        env="EMBEDDING_PROVIDER",
+    )
+
+    # OpenAI
+    openai_api_key: str | None = Field(None, env="OPENAI_API_KEY")
+    openai_embedding_model: str = Field(
+        "text-embedding-3-small",
+        env="OPENAI_EMBEDDING_MODEL",
+    )
+
+    # Hugging Face Inference API
+    hf_api_key: str | None = Field(None, env="HF_API_KEY")
+    hf_embedding_model: str = Field(
+        "sentence-transformers/all-MiniLM-L6-v2",
+        env="HF_EMBEDDING_MODEL",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

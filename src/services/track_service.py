@@ -3,11 +3,10 @@ from __future__ import annotations
 from typing import List, Dict, Any
 import datetime as dt
 
-import pandas as pd
-
 from src.clients.spotify_client import SpotifyClient
 from src.clients.bigquery_client import BigQueryClient
 from src.clients.lyrics_client import LyricsClient
+from src.services.lyrics_embedding_service import LyricsEmbeddingService
 from src.clients.mongo_client import get_mongo
 
 
@@ -26,6 +25,7 @@ class TrackService:
         self.with_lyrics = with_lyrics
         self.lyrics_client = LyricsClient() if with_lyrics else None
         self.mongo = get_mongo() if with_lyrics else None
+        self.lyrics_embedding_service = LyricsEmbeddingService() if with_lyrics else None
 
     async def get_track_ids_for_album(
         self,
@@ -48,6 +48,7 @@ class TrackService:
         Dado un row de track (sin has_lyrics), intenta:
         - Ver si ya hay letras en Mongo.
         - Si no, llama a LyricsClient y guarda el doc en Mongo.
+        - Si hay letras, genera embeddings en lyrics_chunks (si no existen).
         Devuelve True/False según si hay letra.
         """
         if not (self.with_lyrics and self.lyrics_client and self.mongo):
@@ -62,10 +63,22 @@ class TrackService:
         # ¿ya hay letras para este track?
         existing = await self.mongo.lyrics.find_one({"track_id": track_id})
         if existing:
-            # Si ya existe, usamos su flag
-            return bool(existing.get("has_lyrics", False))
+            has_lyrics = bool(existing.get("has_lyrics", False))
 
-        # Si no existe, buscamos
+            # Si ya hay letras pero aún no hay embeddings, los creamos
+            if (
+                has_lyrics
+                and self.lyrics_embedding_service is not None
+            ):
+                existing_chunk = await self.mongo.lyrics_chunks.find_one(
+                    {"track_id": track_id}
+                )
+                if not existing_chunk:
+                    await self.lyrics_embedding_service.process_lyrics_doc(existing)
+
+            return has_lyrics
+
+        # Si no existe, buscamos letras en el proveedor
         main_artist = (artists or "").split(",")[0].strip()
 
         texts = await self.lyrics_client.get_lyrics_texts(
@@ -90,6 +103,11 @@ class TrackService:
         }
 
         await self.mongo.lyrics.insert_one(doc)
+
+        # Si hay letra y tenemos servicio de embeddings, generamos vector y lo guardamos
+        if has_lyrics and self.lyrics_embedding_service is not None:
+            await self.lyrics_embedding_service.process_lyrics_doc(doc)
+
         return has_lyrics
 
     async def build_track_rows_for_album(
@@ -101,7 +119,7 @@ class TrackService:
         1) Obtiene los track_ids del álbum.
         2) Llama a get_tracks_by_ids para traer los tracks completos.
         3) Construye las filas para la tabla `tracks`,
-           incluyendo la flag has_lyrics (y guardando letras en Mongo).
+           incluyendo la flag has_lyrics (y guardando letras en Mongo + embeddings).
         """
         track_ids = await self.get_track_ids_for_album(album_ref)
         if not track_ids:
@@ -157,7 +175,7 @@ class TrackService:
                 "available_markets_count": t_markets_count,
             }
 
-            # --- Letras → Mongo + flag has_lyrics ---
+            # --- Letras → Mongo + flag has_lyrics + embeddings ---
             has_lyrics = await self._fetch_and_store_lyrics(row)
             row["has_lyrics"] = has_lyrics
 
@@ -168,16 +186,17 @@ class TrackService:
     async def ingest_tracks_for_album(
         self,
         album_ref: str,
-    ) -> int:
+    ) -> tuple[int, int]:
         """
         Construye las filas de tracks para un álbum,
         las enriquece con has_lyrics,
-        guarda letras en Mongo y hace MERGE por track_id en BigQuery.
+        guarda letras en Mongo (y embeddings en lyrics_chunks)
+        y hace MERGE por track_id en BigQuery.
         """
         rows = await self.build_track_rows_for_album(album_ref)
         if not rows:
             print(f"[tracks] No se encontraron tracks para álbum {album_ref}")
-            return 0
+            return 0, 0
 
         table_fq = self.bq.table(self.tracks_table)
 
@@ -267,5 +286,10 @@ class TrackService:
             # row ya incluye has_lyrics porque lo llenaste en build_track_rows_for_album
             self.bq.execute(sql, params=row)
 
-        print(f"[tracks] MERGE OK para {len(rows)} tracks del álbum {album_ref}")
-        return len(rows)
+        total = len(rows)
+        with_lyrics = sum(1 for r in rows if r.get("has_lyrics"))
+        print(
+            f"[tracks] MERGE OK para {total} tracks del álbum {album_ref} "
+            f"(con letras: {with_lyrics})"
+        )
+        return total, with_lyrics

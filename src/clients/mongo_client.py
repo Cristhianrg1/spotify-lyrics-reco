@@ -27,6 +27,10 @@ class MongoClientWrapper:
     def lyrics(self):
         return self._db["lyrics"]
 
+    @property
+    def lyrics_chunks(self):
+        return self._db["lyrics_chunks"]
+
 
 @lru_cache
 def get_mongo() -> MongoClientWrapper:
