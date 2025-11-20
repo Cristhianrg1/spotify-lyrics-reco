@@ -1,8 +1,11 @@
+from typing import List
+
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from src.pipelines.ingest_album_pipeline import ingest_album_pipeline
+from src.services.lyrics_search_service import LyricsSearchService
 
 
 app = FastAPI(
@@ -22,6 +25,27 @@ class IngestAlbumResponse(BaseModel):
     tracks_ingested: int
     has_lyrics_count: int | None = None  # cuántos tracks con letra
     message: str
+
+
+class SearchLyricsRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+class SearchLyricsHit(BaseModel):
+    track_id: str | None = None
+    track_name: str | None = None
+    artists: str | None = None
+    album_id: str | None = None
+    chunk_text: str
+    mode: str | None = None
+    score: float
+
+
+class SearchLyricsResponse(BaseModel):
+    query: str
+    top_k: int
+    results: List[SearchLyricsHit]
 
 
 @app.get("/ping")
@@ -62,6 +86,32 @@ async def ingest_album_endpoint(payload: IngestAlbumRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
     return IngestAlbumResponse(**result)
+
+
+@app.post("/search_lyrics", response_model=SearchLyricsResponse)
+async def search_lyrics_endpoint(payload: SearchLyricsRequest):
+    """
+    Búsqueda semántica sobre letras (collection lyrics_chunks en Mongo).
+
+    - Genera embedding del query.
+    - Hace vector search en Mongo Atlas.
+    - Devuelve los mejores chunks con score.
+    """
+    try:
+        service = LyricsSearchService()
+        hits = await service.search(
+            query=payload.query,
+            top_k=payload.top_k,
+        )
+    except Exception as e:
+        print("[ERROR] search_lyrics_endpoint:", repr(e))
+        raise HTTPException(status_code=500, detail="Vector search failed")
+
+    return SearchLyricsResponse(
+        query=payload.query,
+        top_k=payload.top_k,
+        results=[SearchLyricsHit(**h) for h in hits],
+    )
 
 
 if __name__ == "__main__":

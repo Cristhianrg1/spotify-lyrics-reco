@@ -22,20 +22,20 @@ class BigQueryClient:
         self.dataset = dataset or settings.bigquery_dataset
 
         if not self.project_id:
-            raise ValueError("GCP_PROJECT_ID no está configurado en .env")
+            raise ValueError("GCP_PROJECT_ID no está configurado")
         if not self.dataset:
-            raise ValueError("BIGQUERY_DATASET no está configurado en .env")
+            raise ValueError("BIGQUERY_DATASET no está configurado")
 
-        sa_path = settings.google_application_credentials
-        if not sa_path:
-            raise ValueError("GOOGLE_APPLICATION_CREDENTIALS no está configurado en .env")
+        sa_path = getattr(settings, "google_application_credentials", None)
 
-        creds = service_account.Credentials.from_service_account_file(sa_path)
-
-        self._client = bigquery.Client(
-            project=self.project_id,
-            credentials=creds,
-        )
+        if sa_path:
+            creds = service_account.Credentials.from_service_account_file(sa_path)
+            self._client = bigquery.Client(
+                project=self.project_id,
+                credentials=creds,
+            )
+        else:
+            self._client = bigquery.Client(project=self.project_id)
 
     # ---------- helpers ----------
 
