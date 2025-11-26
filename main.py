@@ -8,6 +8,12 @@ from src.pipelines.ingest_album_pipeline import ingest_album_pipeline
 from src.services.lyrics_search_service import LyricsSearchService
 
 
+import logging
+from src.config.logging import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="Spotify Lyrics Ingestion API",
     version="0.1.0",
@@ -82,7 +88,7 @@ async def ingest_album_endpoint(payload: IngestAlbumRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        print("[ERROR] ingest_album_endpoint:", repr(e))
+        logger.error(f"ingest_album_endpoint failed: {repr(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
     return IngestAlbumResponse(**result)
@@ -104,7 +110,7 @@ async def search_lyrics_endpoint(payload: SearchLyricsRequest):
             top_k=payload.top_k,
         )
     except Exception as e:
-        print("[ERROR] search_lyrics_endpoint:", repr(e))
+        logger.error(f"search_lyrics_endpoint failed: {repr(e)}")
         raise HTTPException(status_code=500, detail="Vector search failed")
 
     return SearchLyricsResponse(
@@ -112,6 +118,64 @@ async def search_lyrics_endpoint(payload: SearchLyricsRequest):
         top_k=payload.top_k,
         results=[SearchLyricsHit(**h) for h in hits],
     )
+
+
+# --- Album Analysis Endpoints ---
+
+from src.services.album_analysis_service import AlbumAnalysisService, AnalysisNotFound
+from src.models.album_analysis import AlbumAnalysis
+
+@app.get("/albums/{album_id}/analysis", response_model=AlbumAnalysis)
+async def get_album_analysis(
+    album_id: str,
+    create_if_missing: bool = False,
+    force_recompute: bool = False
+):
+    """
+    Obtiene el análisis de un álbum (topics, sentiment, similarity, etc.).
+    Si no existe y create_if_missing=True, lo genera on-demand.
+    """
+    service = AlbumAnalysisService()
+    try:
+        analysis = await service.get_or_create_analysis(
+            album_id=album_id,
+            create_if_missing=create_if_missing,
+            force_recompute=force_recompute
+        )
+        return analysis
+    except AnalysisNotFound:
+        raise HTTPException(status_code=404, detail="Analysis not found. Use create_if_missing=true to generate.")
+    except Exception as e:
+        logger.error(f"get_album_analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RebuildAnalysisRequest(BaseModel):
+    recompute_topics: bool = True
+    recompute_sentiment: bool = True
+    recompute_similarity: bool = True
+
+
+@app.post("/albums/{album_id}/analysis/rebuild", response_model=AlbumAnalysis)
+async def rebuild_album_analysis(
+    album_id: str,
+    payload: RebuildAnalysisRequest
+):
+    """
+    Fuerza el re-cálculo del análisis de un álbum.
+    """
+    service = AlbumAnalysisService()
+    try:
+        # Por ahora ignoramos los flags finos y recomputamos todo
+        analysis = await service.get_or_create_analysis(
+            album_id=album_id,
+            create_if_missing=True,
+            force_recompute=True
+        )
+        return analysis
+    except Exception as e:
+        logger.error(f"rebuild_album_analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
